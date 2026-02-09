@@ -150,13 +150,21 @@
                 <select id="sectorSelect"></select>
             </div>
             <div class="selector-group">
+                <span class="selector-label">فلتر النوع:</span>
+                <select id="genderSelect"></select>
+            </div>
+            <div class="selector-group">
                 <span class="selector-label">فلتر المدرسة:</span>
                 <select id="schoolSelect"></select>
+            </div>
+            <div class="selector-group">
+                <span class="selector-label">بحث باسم المدرسة:</span>
+                <input id="schoolSearchInput" type="text" placeholder="اكتب اسم المدرسة أو جزءًا منه">
             </div>
         </div>
 
         <div class="chart-card" style="margin-bottom: 2rem;">
-            <h2 class="chart-title">خريطة الاختيار (القطاع / المدرسة)</h2>
+            <h2 class="chart-title">خريطة الاختيار (المادة / القطاع / النوع / المدرسة)</h2>
             <div id="schoolMapContainer" class="school-map-grid"></div>
         </div>
 
@@ -228,7 +236,9 @@ const COLORS=['#498AA8','#2F6581','#ABBDC6','#545355','#19171D','#7BAFD4','#95A5
 const subjectKeys=Object.keys(data);
 let currentSubject=subjectKeys[0];
 let currentSector='all';
+let currentGender='all';
 let currentSchool='all';
+let schoolSearchTerm='';
 let charts={};
 let correctStatsCharts=[];
 
@@ -430,7 +440,17 @@ function getSchoolsBySelection(){
     sectors.forEach(sector=>{
         (gradeData[sector] || []).forEach(school=>schools.push({ ...school, sector }));
     });
-    return schools;
+    return schools
+        .map(row=>({ ...row, gender: inferSchoolGender(row.school) }))
+        .filter(row=>currentGender === 'all' || row.gender === currentGender || row.gender === 'غير محدد')
+        .filter(row=>!schoolSearchTerm || row.school.includes(schoolSearchTerm));
+}
+
+function inferSchoolGender(schoolName=''){
+    const text=String(schoolName);
+    if(text.includes('بنات') || text.includes('طفولة') || text.includes('بنت')) return 'بنات';
+    if(text.includes('بنين') || /(^|\s)ابن(\s|$)/.test(text) || /(^|\s)بن(\s|$)/.test(text)) return 'بنين';
+    return 'غير محدد';
 }
 
 function getSelectedSchoolStats(){
@@ -439,6 +459,7 @@ function getSelectedSchoolStats(){
         const total=schools.reduce((sum, row)=>sum + Number(row.count || 0), 0);
         return {
             sector: currentSector === 'all' ? 'كل القطاعات' : currentSector,
+            gender: currentGender === 'all' ? 'الكل' : currentGender,
             school: 'الكل',
             ministerial: 'متعدد (حسب المدارس المختارة)',
             total
@@ -447,6 +468,7 @@ function getSelectedSchoolStats(){
     const match=schools.find(row=>`${row.sector}||${row.school}||${row.ministerial}` === currentSchool);
     return {
         sector: match?.sector || (currentSector === 'all' ? 'كل القطاعات' : currentSector),
+        gender: match?.gender || (currentGender === 'all' ? 'الكل' : currentGender),
         school: match?.school || 'غير محدد',
         ministerial: match?.ministerial || 'غير متوفر',
         total: Number(match?.count || 0)
@@ -460,7 +482,11 @@ function populateSubjects(){
     select.value=currentSubject;
     select.addEventListener('change', (event)=>{
         currentSubject=event.target.value;
+        currentGender='all';
+        schoolSearchTerm='';
+        document.getElementById('schoolSearchInput').value='';
         populateSectors();
+        populateGenders();
         populateSchools();
         updateDashboard(true);
     });
@@ -484,6 +510,22 @@ function populateSectors(){
     }
 }
 
+function populateGenders(){
+    const genderSelect=document.getElementById('genderSelect');
+    genderSelect.innerHTML=`<option value="all">الكل</option><option value="بنين">بنين</option><option value="بنات">بنات</option>`;
+    if(!['all','بنين','بنات'].includes(currentGender)) currentGender='all';
+    genderSelect.value=currentGender;
+    if(!genderSelect.dataset.bound){
+        genderSelect.addEventListener('change', (event)=>{
+            currentGender=event.target.value;
+            currentSchool='all';
+            populateSchools();
+            updateDashboard(true);
+        });
+        genderSelect.dataset.bound='1';
+    }
+}
+
 function populateSchools(){
     const schoolSelect=document.getElementById('schoolSelect');
     const schools=getSchoolsBySelection().sort((a,b)=>a.school.localeCompare(b.school,'ar'));
@@ -501,13 +543,26 @@ function populateSchools(){
         });
         schoolSelect.dataset.bound='1';
     }
+
+    const schoolSearchInput=document.getElementById('schoolSearchInput');
+    if(!schoolSearchInput.dataset.bound){
+        schoolSearchInput.addEventListener('input', (event)=>{
+            schoolSearchTerm=event.target.value.trim();
+            currentSchool='all';
+            populateSchools();
+            updateDashboard(true);
+        });
+        schoolSearchInput.dataset.bound='1';
+    }
 }
 
 function renderSchoolMap(){
     const target=document.getElementById('schoolMapContainer');
     const stats=getSelectedSchoolStats();
     target.innerHTML=`
+        <div class="school-map-item"><div class="school-map-label">المادة المختارة</div><div class="school-map-value">${currentSubject}</div></div>
         <div class="school-map-item"><div class="school-map-label">القطاع المختار</div><div class="school-map-value">${stats.sector}</div></div>
+        <div class="school-map-item"><div class="school-map-label">النوع المختار</div><div class="school-map-value">${stats.gender}</div></div>
         <div class="school-map-item"><div class="school-map-label">اسم المدرسة</div><div class="school-map-value">${stats.school}</div></div>
         <div class="school-map-item"><div class="school-map-label">الرقم الوزاري للمدرسة</div><div class="school-map-value">${stats.ministerial}</div></div>
         <div class="school-map-item"><div class="school-map-label">عدد المشاركات حسب الاختيار</div><div class="school-map-value">${stats.total.toLocaleString('ar-SA')}</div></div>`;
@@ -834,6 +889,7 @@ window.addEventListener('load', () => {
     updateVisitCounter();
     populateSubjects();
     populateSectors();
+    populateGenders();
     populateSchools();
     updateDashboard();
 });
