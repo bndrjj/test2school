@@ -170,6 +170,10 @@
                     </div>
                 </div>
             </div>
+            <div class="selector-group">
+                <span class="selector-label">بحث باسم المدرسة:</span>
+                <input id="schoolSearchInput" type="text" placeholder="اكتب اسم المدرسة أو جزءًا منه">
+            </div>
         </div>
 
         <div class="chart-card" style="margin-bottom: 2rem;">
@@ -588,6 +592,17 @@ function populateSchools(){
             populateSchools();
         });
         searchInput.dataset.bound='1';
+    }
+
+    const schoolSearchInput=document.getElementById('schoolSearchInput');
+    if(!schoolSearchInput.dataset.bound){
+        schoolSearchInput.addEventListener('input', (event)=>{
+            schoolSearchTerm=event.target.value.trim();
+            currentSchool='all';
+            populateSchools();
+            updateDashboard(true);
+        });
+        schoolSearchInput.dataset.bound='1';
     }
 }
 
