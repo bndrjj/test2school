@@ -496,14 +496,23 @@ function getQuestionGenderShare(question){
     return girlsShare / 100;
 }
 
-function getSchoolSelectionRatio(currentData){
+function getSelectedSchoolSector(){
+    if(currentSchool === 'all') return null;
+    return getSelectedSchoolStats().sector;
+}
+
+function getSchoolShareInSector(currentData){
     if(currentSchool === 'all') return 1;
-    const schoolTotal = Number(getSelectedSchoolStats().total || 0);
-    const baseTotal = Number(currentData.total_students || 1);
-    return Math.max(0, Math.min(1, schoolTotal / baseTotal));
+    const stats = getSelectedSchoolStats();
+    const sector = stats.sector;
+    const sectorTotal = Number((currentData.sector_counts || {})[sector] || 0);
+    if(!sectorTotal) return 0;
+    return Math.max(0, Math.min(1, Number(stats.total || 0) / sectorTotal));
 }
 
 function getFilteredParticipantsTotal(currentData){
+    if(currentSchool !== 'all') return Number(getSelectedSchoolStats().total || 0);
+
     const baseTotal = Number(currentData.total_students || 0);
     if(!baseTotal) return 0;
 
@@ -518,28 +527,52 @@ function getFilteredParticipantsTotal(currentData){
         ratio *= genderCount / baseTotal;
     }
 
-    ratio *= getSchoolSelectionRatio(currentData);
     return Math.round(baseTotal * ratio);
 }
 
 function getFilteredQuestionTotal(question, currentData){
     let ratio = 1;
-    if(currentSector !== 'all'){
-        ratio *= Number((question.sector_percent || {})[currentSector] || 0) / 100;
+    const schoolSector = getSelectedSchoolSector();
+    const targetSector = schoolSector || (currentSector !== 'all' ? currentSector : null);
+
+    if(targetSector){
+        ratio *= Number((question.sector_percent || {})[targetSector] || 0) / 100;
+    }
+    if(currentSchool !== 'all'){
+        ratio *= getSchoolShareInSector(currentData);
     }
     ratio *= getQuestionGenderShare(question);
-    ratio *= getSchoolSelectionRatio(currentData);
     return Number(question.total || 0) * ratio;
 }
 
 function getFilteredOptionCount(question, option, currentData){
     let ratio = 1;
-    if(currentSector !== 'all'){
-        ratio *= Number((option.sector_percent || {})[currentSector] || 0) / 100;
+    const schoolSector = getSelectedSchoolSector();
+    const targetSector = schoolSector || (currentSector !== 'all' ? currentSector : null);
+
+    if(targetSector){
+        ratio *= Number((option.sector_percent || {})[targetSector] || 0) / 100;
+    }
+    if(currentSchool !== 'all'){
+        ratio *= getSchoolShareInSector(currentData);
     }
     ratio *= getQuestionGenderShare(question);
-    ratio *= getSchoolSelectionRatio(currentData);
     return Number(option.count || 0) * ratio;
+}
+
+function getSectorBaselineForQuestion(question, correctOption){
+    const schoolSector = getSelectedSchoolSector();
+    const targetSector = schoolSector || (currentSector !== 'all' ? currentSector : null);
+    if(!targetSector || !correctOption) return null;
+
+    const totalInSector = Number(question.total || 0) * (Number((question.sector_percent || {})[targetSector] || 0) / 100);
+    const correctInSector = Number(correctOption.count || 0) * (Number((correctOption.sector_percent || {})[targetSector] || 0) / 100);
+    if(!totalInSector) return null;
+
+    return {
+        sector: targetSector,
+        rate: (correctInSector / totalInSector) * 100
+    };
 }
 
 function populateSubjects(){
@@ -787,9 +820,11 @@ function renderQuestions(){
         const genderPercent=genderEntries
             .map(([name,percent])=>`<span class="pill">${name}: ${percent}%</span>`)
             .join('');
+        const schoolSector=getSelectedSchoolSector();
+        const targetSector=schoolSector || (currentSector !== 'all' ? currentSector : null);
         let sectorEntries=Object.entries(q.sector_percent || {});
-        if(currentSector !== 'all'){
-            sectorEntries=[[currentSector, Number((q.sector_percent || {})[currentSector] || 0)]];
+        if(targetSector){
+            sectorEntries=[[targetSector, Number((q.sector_percent || {})[targetSector] || 0)]];
         }
         const sectorPercent=sectorEntries
             .sort((a,b)=>b[1]-a[1])
@@ -797,13 +832,21 @@ function renderQuestions(){
             .map(([name,percent])=>`<span class="sector-tag">${name}: ${percent}%</span>`)
             .join('');
         const correctAnswer=(CORRECT_ANSWERS_BY_SUBJECT[currentSubject] || [])[index];
+        const correctOption=q.options.find(option=>correctAnswer && option.answer === correctAnswer);
+        const schoolCorrectCount=correctOption ? getFilteredOptionCount(q, correctOption, currentData) : 0;
+        const schoolCorrectRate=filteredQuestionTotal ? (schoolCorrectCount / filteredQuestionTotal) * 100 : 0;
+        const sectorBaseline=getSectorBaselineForQuestion(q, correctOption);
+        const comparisonText=(currentSchool !== 'all' && sectorBaseline)
+            ? `<span class="pill">مقارنة بقطاع ${sectorBaseline.sector}: ${schoolCorrectRate.toFixed(1)}% (${(schoolCorrectRate - sectorBaseline.rate)>=0?'+':''}${(schoolCorrectRate - sectorBaseline.rate).toFixed(1)} نقطة)</span>`
+            : '';
+
         const options=q.options.map(option=>{
             const isCorrect=correctAnswer && option.answer === correctAnswer;
             const filteredCount=getFilteredOptionCount(q, option, currentData);
             const filteredPercentage=filteredQuestionTotal ? (filteredCount / filteredQuestionTotal) * 100 : 0;
             let optionSectorEntries=Object.entries(option.sector_percent || {});
-            if(currentSector !== 'all'){
-                optionSectorEntries=[[currentSector, Number((option.sector_percent || {})[currentSector] || 0)]];
+            if(targetSector){
+                optionSectorEntries=[[targetSector, Number((option.sector_percent || {})[targetSector] || 0)]];
             }
             const sectorTags=optionSectorEntries
                 .sort((a,b)=>b[1]-a[1])
@@ -829,6 +872,7 @@ function renderQuestions(){
                 <div class="question-meta">
                     <span>عدد الإجابات: <strong>${Math.round(filteredQuestionTotal)}</strong></span>
                     ${genderPercent || '<span class="pill">لا توجد نسب للنوع</span>'}
+                    ${comparisonText}
                 </div>
                 <div class="sector-list">${sectorPercent || '<span class="sector-tag">لا توجد نسب للقطاعات</span>'}</div>
                 <div class="option-list">${options}</div>
@@ -836,10 +880,13 @@ function renderQuestions(){
     }).join('');
 }
 
-function getCorrectSectorStats(currentData){
+function getCorrectSectorStats(currentData, opts={}){
+    const activeSector = opts.forceSector || currentSector;
+    const schoolEnabled = opts.forceSchoolAll ? false : (currentSchool !== 'all');
+
     let sectorEntries=Object.entries(currentData.sector_counts || {}).sort((a,b)=>b[1]-a[1]).slice(0,8);
-    if(currentSector !== 'all'){
-        sectorEntries=[[currentSector, Number((currentData.sector_counts || {})[currentSector] || 0)]];
+    if(activeSector !== 'all'){
+        sectorEntries=[[activeSector, Number((currentData.sector_counts || {})[activeSector] || 0)]];
     }
     const result=sectorEntries.map(([sector])=>({sector,total:0,correct:0,wrong:0,correctRate:0,boysRate:0,girlsRate:0}));
     const indexMap=Object.fromEntries(result.map((item,index)=>[item.sector,index]));
@@ -852,12 +899,14 @@ function getCorrectSectorStats(currentData){
         Object.keys(indexMap).forEach(sector=>{
             let totalInSector=(question.total || 0) * (((question.sector_percent || {})[sector] || 0) / 100);
             let correctInSector=(correctOption.count || 0) * (((correctOption.sector_percent || {})[sector] || 0) / 100);
-            const genderShare=getQuestionGenderShare(question);
+            const genderShare=currentGender === 'all' ? 1 : getQuestionGenderShare(question);
             totalInSector *= genderShare;
             correctInSector *= genderShare;
-            const schoolRatio=getSchoolSelectionRatio(currentData);
-            totalInSector *= schoolRatio;
-            correctInSector *= schoolRatio;
+            if(schoolEnabled){
+                const schoolRatio=getSchoolShareInSector(currentData);
+                totalInSector *= schoolRatio;
+                correctInSector *= schoolRatio;
+            }
             const row=result[indexMap[sector]];
             row.total += totalInSector;
             row.correct += Math.min(correctInSector, totalInSector);
@@ -886,8 +935,17 @@ function renderCorrectStats(){
     correctStatsCharts.forEach(chart=>chart.destroy());
     correctStatsCharts=[];
     const sectorStats=getCorrectSectorStats(currentData);
+    const selectedSector=getSelectedSchoolSector();
+    const sectorBaselineMap={};
+    if(currentSchool !== 'all' && selectedSector){
+        const sectorOnlyStats = getCorrectSectorStats(currentData, { forceSector: selectedSector, forceSchoolAll: true });
+        sectorOnlyStats.forEach(row=>{ sectorBaselineMap[row.sector]=row.correctRate; });
+    }
 
-    container.innerHTML=sectorStats.map((row,index)=>`
+    container.innerHTML=sectorStats.map((row,index)=>{
+        const baseline = sectorBaselineMap[row.sector];
+        const delta = Number.isFinite(baseline) ? (row.correctRate - baseline) : null;
+        return `
         <div class="correct-stat-card">
             <div class="correct-stat-sector">${row.sector}</div>
             <div class="correct-ring-wrap">
@@ -899,6 +957,7 @@ function renderCorrectStats(){
                 </div>
             </div>
             <div class="gender-split-box">
+                ${delta===null ? '' : `<div class="info-note" style="margin-bottom:.5rem;">مقارنة بمتوسط القطاع: ${baseline.toFixed(1)}% (${delta>=0?'+':''}${delta.toFixed(1)} نقطة)</div>`}
                 <div class="gender-split-cell boys">
                     <span class="gender-split-title">البنين</span>
                     <span class="gender-split-value">${row.boysRate.toFixed(1)}%</span>
@@ -908,7 +967,8 @@ function renderCorrectStats(){
                     <span class="gender-split-value">${row.girlsRate.toFixed(1)}%</span>
                 </div>
             </div>
-        </div>`).join('');
+        </div>`;
+    }).join('');
 
     sectorStats.forEach((row,index)=>{
         const ctx=document.getElementById(`correctSectorChart-${index}`);
