@@ -6,6 +6,7 @@
     <title>لوحة ٢ إحصائيات الاختبارات التشخيصي (التجريبي)</title>
     <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@600;700&family=Tajawal:wght@400;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -346,7 +347,149 @@ const CORRECT_ANSWERS_BY_SUBJECT={
 };
 
 
-const subjectKeys = Object.keys(data);
+
+const EXCEL_DATA_SOURCES = [
+    { file: 'TEST3.xlsx', subject: 'اللغة العربية - الصف الثالث الابتدائي' },
+    { file: 'TEST6.xlsx', subject: 'اللغة العربية - الصف السادس الابتدائي' },
+    { file: 'TEST9.xlsx', subject: 'اللغة العربية - الصف الثالث المتوسط' }
+];
+
+function shouldTreatAsQuestionHeader(header){
+    if(!header) return false;
+    const normalized = String(header).trim();
+    if(!normalized) return false;
+    const excludedPrefixes = ['النقاط -', 'ملاحظات -'];
+    if(excludedPrefixes.some(prefix => normalized.startsWith(prefix))) return false;
+    const excludedIncludes = ['وقت', 'البريد الإلكتروني', 'الاسم', 'السجل المدني', 'نوع المدرسة', 'اسم المدرسة', 'رقم المدرسة الوزاري', 'الإدارة التعليمية', 'Id', 'إجمالي النقاط'];
+    return !excludedIncludes.some(token => normalized.includes(token));
+}
+
+function percent(value, total){
+    if(!total) return 0;
+    return Number(((value / total) * 100).toFixed(1));
+}
+
+function buildSubjectDataFromRows(rows){
+    const genderCounts = {};
+    const sectorCounts = {};
+    const schoolBySector = {};
+    const questionStats = {};
+    const totalStudents = rows.length;
+    if(!totalStudents) return { gender_counts: {}, sector_counts: {}, total_students: 0, questions: [], school_by_sector: {} };
+
+    const headers = Object.keys(rows[0] || {});
+    const questionHeaders = headers.filter(shouldTreatAsQuestionHeader);
+
+    rows.forEach((row) => {
+        const gender = String(row['نوع المدرسة'] || '').trim() || 'غير محدد';
+        const sector = String(row['الإدارة التعليمية'] || '').trim() || 'غير محدد';
+        const school = String(row['اسم المدرسة:(كتابة مثل:الابتدائية الثامنة والعشرون)'] || row['اسم المدرسة'] || '').trim() || 'غير محدد';
+        const ministerial = String(row['رقم المدرسة الوزاري:'] || row['رقم المدرسة الوزاري'] || '').trim();
+
+        genderCounts[gender] = (genderCounts[gender] || 0) + 1;
+        sectorCounts[sector] = (sectorCounts[sector] || 0) + 1;
+
+        if(!schoolBySector[sector]) schoolBySector[sector] = {};
+        const schoolKey = `${school}|||${ministerial}`;
+        schoolBySector[sector][schoolKey] = (schoolBySector[sector][schoolKey] || 0) + 1;
+
+        questionHeaders.forEach((question) => {
+            const answer = String(row[question] || '').trim();
+            if(!answer) return;
+            if(!questionStats[question]) questionStats[question] = { total: 0, options: {}, bySector: {} };
+            const entry = questionStats[question];
+            entry.total += 1;
+            entry.bySector[sector] = (entry.bySector[sector] || 0) + 1;
+            if(!entry.options[answer]) entry.options[answer] = { count: 0, bySector: {} };
+            entry.options[answer].count += 1;
+            entry.options[answer].bySector[sector] = (entry.options[answer].bySector[sector] || 0) + 1;
+        });
+    });
+
+    const genderPercent = Object.fromEntries(Object.entries(genderCounts).map(([k, v]) => [k, percent(v, totalStudents)]));
+    const sectorPercent = Object.fromEntries(Object.entries(sectorCounts).map(([k, v]) => [k, percent(v, totalStudents)]));
+
+    const questions = questionHeaders.map((question) => {
+        const stats = questionStats[question] || { total: 0, options: {}, bySector: {} };
+        const options = Object.entries(stats.options)
+            .map(([answer, info]) => ({
+                answer,
+                count: info.count,
+                percentage: percent(info.count, stats.total),
+                sector_percent: Object.fromEntries(Object.entries(info.bySector).map(([k, v]) => [k, percent(v, info.count)]))
+            }))
+            .sort((a, b) => b.count - a.count);
+        return {
+            question,
+            total: stats.total,
+            gender_percent: genderPercent,
+            sector_percent: Object.fromEntries(Object.entries(stats.bySector).map(([k, v]) => [k, percent(v, stats.total)])),
+            options
+        };
+    });
+
+    return {
+        gender_counts: genderCounts,
+        sector_counts: sectorCounts,
+        total_students: totalStudents,
+        questions,
+        school_by_sector: schoolBySector
+    };
+}
+
+function normalizeSchoolStats(rawSchoolStats){
+    const normalized = {};
+    Object.entries(rawSchoolStats).forEach(([sector, schools]) => {
+        normalized[sector] = Object.entries(schools).map(([key, count]) => {
+            const [school, ministerial] = key.split('|||');
+            return { school, ministerial, count };
+        }).sort((a, b) => b.count - a.count);
+    });
+    return normalized;
+}
+
+async function loadDataFromExcelFiles(){
+    if(typeof XLSX === 'undefined') return;
+    const dynamicData = {};
+    const dynamicSchoolFilters = {};
+
+    for (const source of EXCEL_DATA_SOURCES) {
+        try {
+            const response = await fetch(source.file, { cache: 'no-store' });
+            if(!response.ok) continue;
+            const buffer = await response.arrayBuffer();
+            const workbook = XLSX.read(buffer, { type: 'array' });
+            const firstSheet = workbook.SheetNames[0];
+            const worksheet = workbook.Sheets[firstSheet];
+            const rows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+            const subjectData = buildSubjectDataFromRows(rows);
+            dynamicData[source.subject] = {
+                gender_counts: subjectData.gender_counts,
+                sector_counts: subjectData.sector_counts,
+                total_students: subjectData.total_students,
+                questions: subjectData.questions
+            };
+            dynamicSchoolFilters[getGradeKeyFromSubject(source.subject)] = normalizeSchoolStats(subjectData.school_by_sector);
+        } catch (error) {
+            console.warn(`تعذر تحميل ${source.file}:`, error);
+        }
+    }
+
+    if(Object.keys(dynamicData).length){
+        Object.keys(data).forEach((key)=>delete data[key]);
+        Object.assign(data, dynamicData);
+        subjectKeys = Object.keys(data);
+        currentSubject = subjectKeys[0] || "";
+        unifiedModel = buildUnifiedModel(data);
+    }
+
+    if(typeof SCHOOL_FILTER_DATA !== 'undefined' && Object.keys(dynamicSchoolFilters).length){
+        Object.keys(SCHOOL_FILTER_DATA).forEach((key)=>delete SCHOOL_FILTER_DATA[key]);
+        Object.assign(SCHOOL_FILTER_DATA, dynamicSchoolFilters);
+    }
+}
+
+let subjectKeys = Object.keys(data);
 let currentSubject = subjectKeys[0] || '';
 let currentSector = 'all';
 let currentGender = 'all';
@@ -355,7 +498,7 @@ let schoolSearchTerm = '';
 const charts = { gender: null, sector: null };
 const COLORS = ['#498AA8', '#2F6581', '#ABBDC6', '#545355', '#19171D', '#4AA8C7', '#7FB7CA', '#9EC9D8'];
 
-const unifiedModel = buildUnifiedModel(data);
+let unifiedModel = buildUnifiedModel(data);
 let itemSort = { key: 'p', asc: true };
 
 function parseSubjectGrade(label){
@@ -1090,7 +1233,8 @@ function updateDashboard(withLoader=false){
     renderQuestions();
 }
 
-window.addEventListener('load', () => {
+window.addEventListener('load', async () => {
+    await loadDataFromExcelFiles();
     updateVisitCounter();
     populateSubjects();
     populateSectors();
