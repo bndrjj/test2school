@@ -452,6 +452,7 @@ async function loadDataFromExcelFiles(){
     if(typeof XLSX === 'undefined') return;
     const dynamicData = {};
     const dynamicSchoolFilters = {};
+    let hasValidExcelData = false;
 
     for (const source of EXCEL_DATA_SOURCES) {
         try {
@@ -463,6 +464,14 @@ async function loadDataFromExcelFiles(){
             const worksheet = workbook.Sheets[firstSheet];
             const rows = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
             const subjectData = buildSubjectDataFromRows(rows);
+
+            const hasAnyParticipants = Number(subjectData.total_students || 0) > 0;
+            const hasAnyQuestions = Array.isArray(subjectData.questions) && subjectData.questions.length > 0;
+            if(!hasAnyParticipants || !hasAnyQuestions){
+                console.warn(`تم تجاهل ${source.file} بسبب نقص البيانات الصالحة؛ سيتم استخدام البيانات الافتراضية.`);
+                continue;
+            }
+
             dynamicData[source.subject] = {
                 gender_counts: subjectData.gender_counts,
                 sector_counts: subjectData.sector_counts,
@@ -470,12 +479,13 @@ async function loadDataFromExcelFiles(){
                 questions: subjectData.questions
             };
             dynamicSchoolFilters[getGradeKeyFromSubject(source.subject)] = normalizeSchoolStats(subjectData.school_by_sector);
+            hasValidExcelData = true;
         } catch (error) {
             console.warn(`تعذر تحميل ${source.file}:`, error);
         }
     }
 
-    if(Object.keys(dynamicData).length){
+    if(hasValidExcelData && Object.keys(dynamicData).length){
         Object.keys(data).forEach((key)=>delete data[key]);
         Object.assign(data, dynamicData);
         subjectKeys = Object.keys(data);
