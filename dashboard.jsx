@@ -651,6 +651,8 @@ const Dashboard = () => {
     }
 }
 
+  const currentData = data[activeGrade];
+
   const COLORS = ['#498AA8', '#2F6581', '#ABBDC6', '#545355', '#19171D'];
   const UI = {
     page: '#F3F8FA',
