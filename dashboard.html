@@ -346,6 +346,15 @@ const CORRECT_ANSWERS_BY_SUBJECT={
 };
 
 
+const subjectKeys = Object.keys(data);
+let currentSubject = subjectKeys[0] || '';
+let currentSector = 'all';
+let currentGender = 'all';
+let currentSchool = 'all';
+let schoolSearchTerm = '';
+const charts = { gender: null, sector: null };
+const COLORS = ['#498AA8', '#2F6581', '#ABBDC6', '#545355', '#19171D', '#4AA8C7', '#7FB7CA', '#9EC9D8'];
+
 const unifiedModel = buildUnifiedModel(data);
 let itemSort = { key: 'p', asc: true };
 
