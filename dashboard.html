@@ -783,7 +783,7 @@ function getCorrectSectorStats(currentData){
     const effectiveSector=getEffectiveSector(selectedSchool);
     const sectorEntries=(effectiveSector==='all'
         ? Object.entries(currentData.sector_counts || {}).sort((a,b)=>b[1]-a[1]).slice(0,8)
-        : [[effectiveSector, currentData.sector_counts?.[effectiveSector] || 0]);
+        : [[effectiveSector, currentData.sector_counts?.[effectiveSector] || 0]]);
     const result=sectorEntries.map(([sector])=>({sector,total:0,correct:0,wrong:0,correctRate:0,boysRate:0,girlsRate:0}));
     const indexMap=Object.fromEntries(result.map((item,index)=>[item.sector,index]));
     const answerKey=CORRECT_ANSWERS_BY_SUBJECT[currentSubject] || [];
