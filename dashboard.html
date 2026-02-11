@@ -113,16 +113,32 @@
         .quality-count { font-family:'Cairo',sans-serif; font-size:1.5rem; color:#2F6581; }
         .info-note { background:#F8FCFE; border:1px solid rgba(43,71,83,0.12); border-radius:14px; padding:0.9rem; color:#545355; margin-top:0.9rem; }
         .table-wrap { overflow:auto; border:1px solid rgba(43,71,83,0.12); border-radius:14px; }
-        table { width:100%; border-collapse:collapse; min-width:780px; }
-        th,td { padding:0.7rem; border-bottom:1px solid rgba(43,71,83,0.08); text-align:right; }
+        table { width:100%; border-collapse:collapse; min-width:980px; table-layout: fixed; }
+        th,td { padding:0.7rem; border-bottom:1px solid rgba(43,71,83,0.08); text-align:right; vertical-align: middle; }
         th { background:#F8FCFE; cursor:pointer; font-family:'Cairo',sans-serif; }
+        #itemAnalysisTable th:nth-child(1), #itemAnalysisTable td:nth-child(1) { width:4.5rem; text-align:center; }
+        #itemAnalysisTable th:nth-child(2), #itemAnalysisTable td:nth-child(2) { width:32%; }
+        #itemAnalysisTable th:nth-child(3), #itemAnalysisTable td:nth-child(3),
+        #itemAnalysisTable th:nth-child(4), #itemAnalysisTable td:nth-child(4),
+        #itemAnalysisTable th:nth-child(5), #itemAnalysisTable td:nth-child(5),
+        #itemAnalysisTable th:nth-child(6), #itemAnalysisTable td:nth-child(6) { width:7.75rem; }
+        #itemAnalysisTable th:nth-child(7), #itemAnalysisTable td:nth-child(7) { width:35%; }
+        .item-question-cell {
+            white-space: normal;
+            word-break: break-word;
+            line-height: 1.65;
+            font-weight: 700;
+            color: #2B4753;
+        }
         .chip { display:inline-block; padding:0.2rem 0.5rem; border-radius:20px; background:rgba(73,138,168,0.16); color:#2F6581; font-size:0.82rem; }
         .heatmap-grid { display:grid; gap:0.65rem; }
         .heat-row { display:grid; grid-template-columns: 140px repeat(3,minmax(110px,1fr)); gap:0.55rem; }
         .heat-label { font-weight:700; color:#545355; align-self:center; }
         .heat-cell { border:none; border-radius:10px; padding:0.65rem; color:#fff; cursor:pointer; font-weight:700; }
         .heat-cell.active { outline:3px solid #19171D; }
-        .distractor-bars { display:grid; gap:0.35rem; margin-top:0.45rem; }
+        .distractor-bars { display:grid; gap:0.5rem; }
+        .distractor-item { display:grid; grid-template-columns: minmax(90px, auto) 1fr; gap:0.55rem; align-items:center; }
+        .distractor-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color:#2B4753; font-weight: 600; }
         .d-bar { height:10px; border-radius:99px; background:#E9EFF3; overflow:hidden; }
         .d-bar > span { display:block; height:100%; background:#4AA8C7; }
 
@@ -921,7 +937,7 @@ function renderItemAnalysis(){
     });
     table.innerHTML=`<thead><tr>
     <th data-k="idx">#</th><th data-k="question">السؤال</th><th data-k="p">P الصعوبة</th><th data-k="dValue">التمييز</th><th>الطريقة</th><th>حالة السؤال</th><th>المشتتات</th></tr></thead>
-    <tbody>${rows.map(r=>`<tr><td>${r.idx}</td><td>${r.question}</td><td>${r.p.toLocaleString('ar-SA',{minimumFractionDigits:2,maximumFractionDigits:2})}%</td><td>${r.dValue===null?'—':r.dValue.toFixed(2)}</td><td>${r.dMethod}</td><td><span class="chip">${r.flag}</span></td><td><div class="distractor-bars">${r.options.slice(0,4).map(o=>`<div>${o.answer} (${Number(o.filteredPercentage||o.percentage||0).toFixed(1)}%)<div class="d-bar"><span style="width:${Number(o.filteredPercentage||o.percentage||0)}%"></span></div></div>`).join('')}</div></td></tr>`).join('')}</tbody>`;
+    <tbody>${rows.map(r=>`<tr><td>${r.idx}</td><td class="item-question-cell">${r.question}</td><td>${r.p.toLocaleString('ar-SA',{minimumFractionDigits:2,maximumFractionDigits:2})}%</td><td>${r.dValue===null?'—':r.dValue.toFixed(2)}</td><td>${r.dMethod}</td><td><span class="chip">${r.flag}</span></td><td><div class="distractor-bars">${r.options.slice(0,4).map(o=>`<div class="distractor-item"><span class="distractor-label">${o.answer} (${Number(o.filteredPercentage||o.percentage||0).toFixed(1)}%)</span><div class="d-bar"><span style="width:${Number(o.filteredPercentage||o.percentage||0)}%"></span></div></div>`).join('')}</div></td></tr>`).join('')}</tbody>`;
     table.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{ const k=th.dataset.k; itemSort={key:k,asc:itemSort.key===k?!itemSort.asc:true}; renderItemAnalysis(); });
     const noPB = 'لا تتوفر بيانات كافية لحساب: نحتاج مصفوفة إجابات طالب-بند + الدرجة الكلية لكل طالب.';
     note.textContent = `${noPB} تم استخدام  (أعلى/أدنى 27%) كتقدير بديل عند توفر التوزيعات.`;
