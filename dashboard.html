@@ -532,6 +532,78 @@ function applySubjectFilter(facts){
     return facts.filter(f => f.label === currentSubject);
 }
 
+function getSelectedSchool(){
+    return schoolListCache.find(s=>s.key===activeFilters.schoolKey) || null;
+}
+
+function getEffectiveSector(selectedSchool=getSelectedSchool()){
+    return selectedSchool?.sector || activeFilters.sector;
+}
+
+function getSchoolShareInSector(currentData, selectedSchool=getSelectedSchool()){
+    if(!selectedSchool) return null;
+    const sectorTotal=Number(currentData.sector_counts?.[selectedSchool.sector] || 0);
+    if(!sectorTotal) return null;
+    return Math.min(Math.max(Number(selectedSchool.count || 0) / sectorTotal, 0), 1);
+}
+
+function getGenderFactor(baseGenderPercents={}){
+    if(activeFilters.gender==='all') return 1;
+    return Math.min(Math.max(Number(baseGenderPercents?.[activeFilters.gender] || 0) / 100, 0), 1);
+}
+
+function getFilteredParticipants(currentData){
+    const selectedSchool=getSelectedSchool();
+    if(selectedSchool) return Number(selectedSchool.count || 0);
+    const effectiveSector=getEffectiveSector(selectedSchool);
+    let total=effectiveSector!=='all'
+        ? Number(currentData.sector_counts?.[effectiveSector] || 0)
+        : Number(currentData.total_students || 0);
+    if(activeFilters.gender!=='all'){
+        const genderCount=Number(currentData.gender_counts?.[activeFilters.gender] || 0);
+        if(effectiveSector==='all') return genderCount;
+        const allCount=Number(currentData.total_students || 0) || 1;
+        total*=genderCount / allCount;
+    }
+    return Math.round(total);
+}
+
+function getQuestionFilteredMetrics(question, currentData){
+    const selectedSchool=getSelectedSchool();
+    const effectiveSector=getEffectiveSector(selectedSchool);
+    const schoolShare=getSchoolShareInSector(currentData, selectedSchool);
+    const genderFactor=getGenderFactor(question.gender_percent || {});
+
+    const sectorFactor=effectiveSector==='all'
+        ? 1
+        : Number((question.sector_percent || {})[effectiveSector] || 0) / 100;
+    let total=(Number(question.total || 0) * sectorFactor * genderFactor);
+    if(selectedSchool && schoolShare!==null) total*=schoolShare;
+
+    const options=(question.options || []).map(option=>{
+        const optionSectorFactor=effectiveSector==='all'
+            ? 1
+            : Number((option.sector_percent || {})[effectiveSector] || 0) / 100;
+        let count=Number(option.count || 0) * optionSectorFactor * genderFactor;
+        if(selectedSchool && schoolShare!==null) count*=schoolShare;
+        const percentage=total>0 ? (count/total)*100 : 0;
+        return {
+            ...option,
+            filteredCount: count,
+            filteredPercentage: percentage
+        };
+    });
+
+    return {
+        total,
+        options,
+        sector: effectiveSector,
+        schoolShare,
+        selectedSchool,
+        genderFactor
+    };
+}
+
 function populateSubjects(){
     const select=document.getElementById('subjectSelect');
     select.innerHTML='';
@@ -548,15 +620,32 @@ function renderSummaryCards(isLoading=false){
         return;
     }
     const facts = applySubjectFilter(unifiedModel.facts);
-    const pValues = facts.map(f=>f.p).filter(v=>Number.isFinite(v));
+    const currentQuestions=currentData.questions || [];
+    const pValues = currentQuestions.map((q,index)=>{
+        const correctAnswer=(CORRECT_ANSWERS_BY_SUBJECT[currentSubject] || [])[index];
+        const metrics=getQuestionFilteredMetrics(q,currentData);
+        const correctOption=metrics.options.find(o=>o.answer===correctAnswer);
+        return Number(correctOption?.filteredPercentage);
+    }).filter(v=>Number.isFinite(v));
     const sorted=[...pValues].sort((a,b)=>a-b);
     const mean = pValues.length ? pValues.reduce((a,b)=>a+b,0)/pValues.length : 0;
     const median = sorted.length ? (sorted[Math.floor((sorted.length-1)/2)] + sorted[Math.ceil((sorted.length-1)/2)]) / 2 : 0;
     const std = pValues.length ? Math.sqrt(pValues.reduce((a,v)=>a+Math.pow(v-mean,2),0)/pValues.length) : 0;
-    const best = facts.reduce((m,f)=>f.p>m.p?f:m,{p:-1,question:'-'});
-    const worst = facts.reduce((m,f)=>f.p<m.p?f:m,{p:999,question:'-'});
+    const best = currentQuestions.reduce((m,q,index)=>{
+        const correctAnswer=(CORRECT_ANSWERS_BY_SUBJECT[currentSubject] || [])[index];
+        const metrics=getQuestionFilteredMetrics(q,currentData);
+        const p=metrics.options.find(o=>o.answer===correctAnswer)?.filteredPercentage ?? -1;
+        return p>m.p ? {p,question:q.question} : m;
+    },{p:-1,question:'-'});
+    const worst = currentQuestions.reduce((m,q,index)=>{
+        const correctAnswer=(CORRECT_ANSWERS_BY_SUBJECT[currentSubject] || [])[index];
+        const metrics=getQuestionFilteredMetrics(q,currentData);
+        const p=metrics.options.find(o=>o.answer===correctAnswer)?.filteredPercentage ?? 999;
+        return p<m.p ? {p,question:q.question} : m;
+    },{p:999,question:'-'});
+    const participants=getFilteredParticipants(currentData);
     const cards=[
-        ['عدد المشاركين', currentData.total_students, 'طالب/طالبة'],
+        ['عدد المشاركين', participants, 'طالب/طالبة'],
         ['متوسط الدرجة/النسبة', `${mean.toFixed(1)}%`, 'حسب الأسئلة المتاحة'],
         ['الوسيط', `${median.toFixed(1)}%`, 'مركز التوزيع'],
         ['الانحراف المعياري', std.toFixed(2), 'تشتت الأداء'],
@@ -582,7 +671,12 @@ function renderGenderChart(){
     const currentData=data[currentSubject];
     const ctx=document.getElementById('genderChart');
     if(charts.gender) charts.gender.destroy();
-    const genderData=Object.entries(currentData.gender_counts || {});
+    const participants=getFilteredParticipants(currentData) || 1;
+    const school=getSelectedSchool();
+    const genderData=(activeFilters.gender==='all'
+        ? Object.entries(currentData.gender_counts || {})
+        : [[activeFilters.gender, participants]])
+        .map(([name,value])=>[name, school ? Math.round(participants*(Number(value)/Math.max(Number(currentData.total_students||1),1))) : Number(value)]);
     charts.gender=new Chart(ctx,{
         type:'pie',
         data:{
@@ -597,7 +691,7 @@ function renderGenderChart(){
                 tooltip:{callbacks:{label:function(context){
                     const label=context.label||'';
                     const value=context.parsed;
-                    const percentage=((value/currentData.total_students)*100).toFixed(1);
+                    const percentage=((value/participants)*100).toFixed(1);
                     return `${label}: ${value} (${percentage}%)`;
                 }}}
             }
@@ -609,7 +703,11 @@ function renderSectorChart(){
     const currentData=data[currentSubject];
     const ctx=document.getElementById('sectorChart');
     if(charts.sector) charts.sector.destroy();
-    const sectorData=Object.entries(currentData.sector_counts || {}).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    const selectedSchool=getSelectedSchool();
+    const effectiveSector=getEffectiveSector(selectedSchool);
+    const sectorData=(effectiveSector==='all'
+        ? Object.entries(currentData.sector_counts || {}).sort((a,b)=>b[1]-a[1]).slice(0,8)
+        : [[effectiveSector, getFilteredParticipants(currentData)]]);
     charts.sector=new Chart(ctx,{
         type:'bar',
         data:{
@@ -623,7 +721,7 @@ function renderSectorChart(){
                 legend:{display:false},
                 tooltip:{callbacks:{label:function(context){
                     const value=context.parsed.y;
-                    const percentage=((value/currentData.total_students)*100).toFixed(1);
+                    const percentage=((value/Math.max(getFilteredParticipants(currentData),1))*100).toFixed(1);
                     return `عدد الطلاب: ${value} (${percentage}%)`;
                 }}}
             },
@@ -637,6 +735,7 @@ function renderQuestions(){
     const container=document.getElementById('questionsContainer');
     const questions=currentData.questions || [];
     container.innerHTML=questions.map((q,index)=>{
+        const metrics=getQuestionFilteredMetrics(q,currentData);
         const genderPercent=Object.entries(q.gender_percent || {})
             .map(([name,percent])=>`<span class="pill">${name}: ${percent}%</span>`)
             .join('');
@@ -646,7 +745,7 @@ function renderQuestions(){
             .map(([name,percent])=>`<span class="sector-tag">${name}: ${percent}%</span>`)
             .join('');
         const correctAnswer=(CORRECT_ANSWERS_BY_SUBJECT[currentSubject] || [])[index];
-        const options=q.options.map(option=>{
+        const options=metrics.options.map(option=>{
             const isCorrect=correctAnswer && option.answer === correctAnswer;
             const sectorTags=Object.entries(option.sector_percent || {})
                 .sort((a,b)=>b[1]-a[1])
@@ -657,9 +756,9 @@ function renderQuestions(){
                 <div class="option-item ${isCorrect ? 'correct-option' : ''}">
                     <div class="option-header">
                         <div class="option-answer">${option.answer}</div>
-                        <div class="option-stats">${option.count} إجابة • ${option.percentage}% ${isCorrect ? '<span class="correct-badge">الإجابة الصحيحة</span>' : ''}</div>
+                        <div class="option-stats">${Math.round(option.filteredCount).toLocaleString('ar-SA')} إجابة • ${option.filteredPercentage.toFixed(1)}% ${isCorrect ? '<span class="correct-badge">الإجابة الصحيحة</span>' : ''}</div>
                     </div>
-                    <div class="progress-bar"><div class="progress-fill" style="width: ${option.percentage}%"></div></div>
+                    <div class="progress-bar"><div class="progress-fill" style="width: ${option.filteredPercentage}%"></div></div>
                     <details>
                         <summary>نسبة القطاعات ضمن هذا الاختيار</summary>
                         <div class="sector-list">${sectorTags || '<span class="sector-tag">لا توجد بيانات قطاع</span>'}</div>
@@ -670,7 +769,7 @@ function renderQuestions(){
             <div class="question-card">
                 <div class="question-title">${index + 1}. ${q.question}</div>
                 <div class="question-meta">
-                    <span>عدد الإجابات: <strong>${q.total}</strong></span>
+                    <span>عدد الإجابات: <strong>${Math.round(metrics.total).toLocaleString('ar-SA')}</strong></span>
                     ${genderPercent || '<span class="pill">لا توجد نسب للنوع</span>'}
                 </div>
                 <div class="sector-list">${sectorPercent || '<span class="sector-tag">لا توجد نسب للقطاعات</span>'}</div>
@@ -680,7 +779,11 @@ function renderQuestions(){
 }
 
 function getCorrectSectorStats(currentData){
-    const sectorEntries=Object.entries(currentData.sector_counts || {}).sort((a,b)=>b[1]-a[1]).slice(0,8);
+    const selectedSchool=getSelectedSchool();
+    const effectiveSector=getEffectiveSector(selectedSchool);
+    const sectorEntries=(effectiveSector==='all'
+        ? Object.entries(currentData.sector_counts || {}).sort((a,b)=>b[1]-a[1]).slice(0,8)
+        : [[effectiveSector, currentData.sector_counts?.[effectiveSector] || 0]);
     const result=sectorEntries.map(([sector])=>({sector,total:0,correct:0,wrong:0,correctRate:0,boysRate:0,girlsRate:0}));
     const indexMap=Object.fromEntries(result.map((item,index)=>[item.sector,index]));
     const answerKey=CORRECT_ANSWERS_BY_SUBJECT[currentSubject] || [];
@@ -690,16 +793,19 @@ function getCorrectSectorStats(currentData){
         const correctOption=(question.options || []).find(option=>option.answer===correctAnswer);
         if(!correctOption) return;
         Object.keys(indexMap).forEach(sector=>{
-            const totalInSector=(question.total || 0) * (((question.sector_percent || {})[sector] || 0) / 100);
-            const correctInSector=(correctOption.count || 0) * (((correctOption.sector_percent || {})[sector] || 0) / 100);
+            const metrics=getQuestionFilteredMetrics(question,currentData);
+            const totalInSector=(metrics.total || 0) * (effectiveSector==='all' ? (((question.sector_percent || {})[sector] || 0) / 100) : 1);
+            const correctOptionMetrics=metrics.options.find(o=>o.answer===correctAnswer);
+            const correctInSector=(correctOptionMetrics?.filteredCount || 0) * (effectiveSector==='all' ? (((correctOption.sector_percent || {})[sector] || 0) / 100) : 1);
             const row=result[indexMap[sector]];
             row.total += totalInSector;
             row.correct += Math.min(correctInSector, totalInSector);
         });
     });
 
-    const boysCount=Number(currentData.gender_counts?.['بنين'] || 0);
-    const girlsCount=Number(currentData.gender_counts?.['بنات'] || 0);
+    const participants=Math.max(getFilteredParticipants(currentData),1);
+    const boysCount=activeFilters.gender==='all' ? Number(currentData.gender_counts?.['بنين'] || 0) : (activeFilters.gender==='بنين' ? participants : 0);
+    const girlsCount=activeFilters.gender==='all' ? Number(currentData.gender_counts?.['بنات'] || 0) : (activeFilters.gender==='بنات' ? participants : 0);
     const genderBase=(boysCount + girlsCount) || 1;
     const boysRatio=boysCount / genderBase;
     const girlsRatio=girlsCount / genderBase;
@@ -723,7 +829,7 @@ function renderCorrectStats(){
 
     container.innerHTML=sectorStats.map((row,index)=>`
         <div class="correct-stat-card">
-            <div class="correct-stat-sector">${row.sector}</div>
+            <div class="correct-stat-sector">${row.sector}${getSelectedSchool() ? ' (المدرسة المختارة)' : ''}</div>
             <div class="correct-ring-wrap">
                 <canvas id="correctSectorChart-${index}"></canvas>
                 <div class="correct-ring-center">
@@ -781,9 +887,12 @@ function estimateDiscrimination(question, qIdx){
     const correctAnswer=(CORRECT_ANSWERS_BY_SUBJECT[currentSubject] || [])[qIdx];
     const correctOption=(question.options||[]).find(o=>o.answer===correctAnswer);
     if(!correctOption) return { method:'غير متاح', value:null };
+    const currentData=data[currentSubject];
+    const metrics=getQuestionFilteredMetrics(question,currentData);
+    const filteredCorrect=metrics.options.find(o=>o.answer===correctAnswer);
     const sectorRates = Object.entries(question.sector_percent || {}).map(([sector, pct])=>{
-        const total=(question.total||0)*(pct/100);
-        const correct=(correctOption.count||0)*(((correctOption.sector_percent||{})[sector]||0)/100);
+        const total=(metrics.total||0)*(pct/100);
+        const correct=(filteredCorrect?.filteredCount||0)*(((correctOption.sector_percent||{})[sector]||0)/100);
         return { sector, total, rate: total? (correct/total)*100 : 0 };
     }).filter(x=>x.total>0).sort((a,b)=>b.rate-a.rate);
     if(sectorRates.length<4) return { method:'غير متاح', value:null };
@@ -799,7 +908,8 @@ function renderItemAnalysis(){
     const note=document.getElementById('itemAnalysisNote');
     const currentData=data[currentSubject];
     const rows=(currentData.questions||[]).map((q,idx)=>{
-        const p=((q.options||[]).find(o=>o.answer===(CORRECT_ANSWERS_BY_SUBJECT[currentSubject]||[])[idx])?.percentage)||0;
+        const metrics=getQuestionFilteredMetrics(q,currentData);
+        const p=((metrics.options||[]).find(o=>o.answer===(CORRECT_ANSWERS_BY_SUBJECT[currentSubject]||[])[idx])?.filteredPercentage)||0;
         const d=estimateDiscrimination(q,idx);
         const flag = p<30 ? 'صعب جدًا' : p>90 ? 'سهل جدًا' : (d.value!==null && d.value<0.2 ? 'تمييز ضعيف' : 'مقبول');
         return {idx:idx+1, question:q.question, p, dValue:d.value, dMethod:d.method, flag, options:q.options||[]};
@@ -811,7 +921,7 @@ function renderItemAnalysis(){
     });
     table.innerHTML=`<thead><tr>
     <th data-k="idx">#</th><th data-k="question">السؤال</th><th data-k="p">P الصعوبة</th><th data-k="dValue">التمييز</th><th>الطريقة</th><th>حالة السؤال</th><th>المشتتات</th></tr></thead>
-    <tbody>${rows.map(r=>`<tr><td>${r.idx}</td><td>${r.question}</td><td>${r.p.toFixed(1)}%</td><td>${r.dValue===null?'—':r.dValue.toFixed(2)}</td><td>${r.dMethod}</td><td><span class="chip">${r.flag}</span></td><td><div class="distractor-bars">${r.options.slice(0,4).map(o=>`<div>${o.answer} (${o.percentage}%)<div class="d-bar"><span style="width:${o.percentage}%"></span></div></div>`).join('')}</div></td></tr>`).join('')}</tbody>`;
+    <tbody>${rows.map(r=>`<tr><td>${r.idx}</td><td>${r.question}</td><td>${r.p.toLocaleString('ar-SA',{minimumFractionDigits:2,maximumFractionDigits:2})}%</td><td>${r.dValue===null?'—':r.dValue.toFixed(2)}</td><td>${r.dMethod}</td><td><span class="chip">${r.flag}</span></td><td><div class="distractor-bars">${r.options.slice(0,4).map(o=>`<div>${o.answer} (${Number(o.filteredPercentage||o.percentage||0).toFixed(1)}%)<div class="d-bar"><span style="width:${Number(o.filteredPercentage||o.percentage||0)}%"></span></div></div>`).join('')}</div></td></tr>`).join('')}</tbody>`;
     table.querySelectorAll('th[data-k]').forEach(th=>th.onclick=()=>{ const k=th.dataset.k; itemSort={key:k,asc:itemSort.key===k?!itemSort.asc:true}; renderItemAnalysis(); });
     const noPB = 'لا تتوفر بيانات كافية لحساب: نحتاج مصفوفة إجابات طالب-بند + الدرجة الكلية لكل طالب.';
     note.textContent = `${noPB} تم استخدام  (أعلى/أدنى 27%) كتقدير بديل عند توفر التوزيعات.`;
@@ -824,7 +934,7 @@ function renderReliability(){
 function renderInference(){
     const container=document.getElementById('inferenceContainer');
     const currentData=data[currentSubject];
-    const n=currentData.total_students||0;
+    const n=getFilteredParticipants(currentData);
     const small=n<30;
     container.innerHTML=`
         <div class="info-note">مقارنة النوع: لا تتوفر بيانات درجات رقمية فردية حسب النوع، لذلك لا يمكن إجراء الاختبار بدقة.</div>
